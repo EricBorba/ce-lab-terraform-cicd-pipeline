@@ -44,3 +44,25 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      # -------------------------
+      # Slack Notifications
+      # -------------------------
+
+      - name: Notify Slack (Success)
+        if: success()
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+          --data "{
+            \"text\": \"✅ Terraform CD succeeded for *${{ github.repository }}* on branch *${{ github.ref_name }}*\"
+          }" \
+          ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Notify Slack (Failure)
+        if: failure()
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+          --data "{
+            \"text\": \"❌ Terraform CD FAILED for *${{ github.repository }}* on branch *${{ github.ref_name }}*\"
+          }" \
+          ${{ secrets.SLACK_WEBHOOK_URL }}
