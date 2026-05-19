@@ -23,17 +23,17 @@ The Terraform code provisions a networking baseline on AWS:
 
 ## Pipeline Architecture
 
-Two GitHub Actions workflows implement the CI/CD flow:
+Three GitHub Actions workflows implement the full pipeline:
 
 ```
-Feature Branch ──► Pull Request ──► main
-                        │               │
-                    [ci.yml]        [cd.yml]
-                  Format Check      Init
-                     Init           Plan
-                   Validate         Apply
-                     Plan       (production env)
-                  Post to PR
+Feature Branch ──► Pull Request ──► main          workflow_dispatch
+                        │               │                │
+                    [ci.yml]        [cd.yml]        [destroy.yml]
+                  Format Check      Init            confirm='destroy'
+                     Init           Plan                 Init
+                   Validate         Apply              Destroy
+                     Plan       Slack Notify       (production env)
+                  Post to PR   (production env)
 ```
 
 ### CI Workflow (`ci.yml`)
@@ -61,8 +61,23 @@ Triggered on every **push to `main`** (i.e., after PR merge).
 | Init | `terraform init` |
 | Plan | `terraform plan -input=false -no-color` |
 | Apply | `terraform apply -auto-approve -input=false -no-color` |
+| Notify Slack (Success) | Posts ✅ message to Slack via `SLACK_WEBHOOK_URL` if all steps succeed |
+| Notify Slack (Failure) | Posts ❌ message to Slack via `SLACK_WEBHOOK_URL` if any step fails |
 
 The job runs in the `production` GitHub Environment, which enforces deployment protection rules before the apply step executes.
+
+### Destroy Workflow (`destroy.yml`)
+
+Triggered manually via **`workflow_dispatch`** — requires typing `destroy` in the confirmation input to prevent accidental runs.
+
+| Step | Action |
+|---|---|
+| Checkout | `actions/checkout@v4` |
+| Setup Terraform | `hashicorp/setup-terraform@v3` (latest) |
+| Init | `terraform init` |
+| Destroy | `terraform destroy -auto-approve -input=false -no-color` |
+
+The job also runs in the `production` environment, so the same deployment protection rules apply.
 
 ## Setup
 
@@ -74,6 +89,7 @@ Navigate to **Settings → Secrets and variables → Actions** and add:
 |---|---|
 | `AWS_ACCESS_KEY_ID` | IAM user access key with permissions to manage the target resources |
 | `AWS_SECRET_ACCESS_KEY` | Corresponding secret access key |
+| `SLACK_WEBHOOK_URL` | Incoming webhook URL for the target Slack channel |
 
 ![AWS Secrets configured](screenshots/checkingAWSSecrets.png)
 
@@ -128,11 +144,25 @@ Once approved, the CD pipeline resumes and runs `terraform apply`.
 
 ![CD starting deployment](screenshots/startingCD.png)
 
-### Step 8 – CD Passes
+### Step 8 – CD Passes with Slack Notification
 
-The **Deploy Infrastructure** job completes successfully. Infrastructure is live in AWS.
+The **Deploy Infrastructure** job completes successfully, including the **Notify Slack (Success)** step. Infrastructure is live in AWS and the team is notified in the Slack channel.
 
-![CD passed](screenshots/checkingCDPassed.png)
+![CD passed with Slack notification step](screenshots/slackNotificationPassed.png)
+
+![Slack success message received in #general](screenshots/checkingSlackNotification.png)
+
+### Step 9 – Destroy Infrastructure (Manual)
+
+To tear down the infrastructure, trigger the **Terraform Destroy** workflow manually from the Actions tab. Type `destroy` in the confirmation field and click **Run workflow**.
+
+![Triggering the destroy workflow](screenshots/checkingDestroyingAction.png)
+
+The `production` environment protection rules apply here as well. Once approved (or skipped), the destroy job runs.
+
+![Destroy in progress](screenshots/runningDestroyingAction.png)
+
+![Destroy passed](screenshots/DetroyingActionPassed.png)
 
 ## File Structure
 
@@ -141,7 +171,8 @@ m5-02-cicd/
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml          # PR validation pipeline
-│       └── cd.yml          # Deployment pipeline
+│       ├── cd.yml          # Deployment pipeline with Slack notifications
+│       └── destroy.yml     # Manual teardown workflow
 ├── backend.tf              # S3 remote state + DynamoDB locking
 ├── main.tf                 # VPC, subnets, IGW, route tables
 ├── variables.tf            # Input variable declarations
@@ -157,3 +188,5 @@ m5-02-cicd/
 - **Environment protection rules** – required reviewer approval and a wait timer gate production deployments, preventing accidental or instant applies
 - **Remote state with locking** – S3 backend with DynamoDB ensures state consistency across CI and CD runs
 - **Least-privilege secrets** – AWS credentials are stored as encrypted repository secrets and never exposed in logs
+- **Slack notifications** – the CD workflow posts a success or failure message to a Slack channel after every deployment, giving the team instant visibility without checking GitHub
+- **Safe destroy workflow** – infrastructure teardown requires manual dispatch with a typed `destroy` confirmation, preventing accidental deletion while still running through the same production environment gate
